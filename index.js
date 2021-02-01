@@ -28,7 +28,6 @@ app.get('/balanceOf/:address', async (req, res) => {
 
     const { nonce, data: balance } = await api.query.system.account(address);
 
-
     res.send(`${now}: balance of ${balance.free} and a nonce of ${nonce}`)
 });
 
@@ -90,14 +89,9 @@ app.post('/transact/', async (req, res) => {
     const recipient = req.query.recipient;
     const amount = req.query.amount;
 
-    console.log('sender: ' + sender);
-    console.log('user: ' + user);
-    console.log('rec ' + recipient);
-    console.log(amount)
-
     const result = await db.collection('users').doc(user).collection('wallets').doc(sender).get();
     let resData = result.data()
-    console.log(result.data())
+
     let mnemonic = resData.mnemonic;
 
     let credentials = await createCredentials(mnemonic)
@@ -119,9 +113,6 @@ async function performTransaction(sender, receiver, amount, user) {
                 events.forEach(({ phase, event: { data, method, section } }) => {
                     console.log(`\t' ${phase}: ${section}.${method}:: ${data}`);
                 });
-                console.log('sent: ' + sender.address)
-                console.log('rec:: ' + receiver)
-                console.log('amtmtm : : ' + amount)
                 let data = [
                     sender.address,
                     receiver,
@@ -159,10 +150,6 @@ app.get('/transactionWeight/:amount', async (req, res) => {
     } catch (e) {
         console.log(e)
     }
-
-    
-
-
 
     //res.send(`transaction will have a weight of ${weight}, with ${partialFee.toHuman()} weight fees`);
     res.send(`${info.weight.toString()}`);
@@ -215,13 +202,7 @@ const checkForAddresses = (data) => {
 
     let from = data[0].toHuman().toString();
     let to = data[1].toHuman().toString();
-
     let amount = data[2].toHuman().toString();
-
-    console.log('from: ' + from);
-    console.log('to: ' + to);
-    console.log('amount: ' + amount);
-    console.log('ja')
 
     if (addresses.includes(from)) {
         console.log('address included');
@@ -238,8 +219,6 @@ const saveTransaction = async (data, incoming) => {
     let from = data[0].toString();
     let to = data[1].toString();
     let amount = data[2].toString();
-    console.log(amount)
-    
 
     let receiving = incoming;
     let address = incoming ? to : from;
@@ -257,16 +236,13 @@ const saveTransaction = async (data, incoming) => {
     } catch (e) {
         
     }
-
     const result = await db.collection('addresses').doc(address).get();
     let resData = result.data()
     let uid = resData.uid;
-
-    
-    console.log(amount);
+  
     const collection = db.collection('users').doc(uid).collection('wallets').doc(address).collection('transactions')
     let timestamp = Date.now()
-    console.log('saving2');
+
     await collection.add({
         from: from,
         to: to,
@@ -274,18 +250,15 @@ const saveTransaction = async (data, incoming) => {
         receiving: receiving,
         timestamp: timestamp
     });
-    console.log('saving3')
+
     updateBalance(address, uid);
 }
 
 //////Updates Balance of address
 const updateBalance = async (address, uid) => {
-    console.log(address);
-    console.log(uid);
     const { nonce, data: balance } = await api.query.system.account(address);
-    console.log(balance.toHuman());
+
     let balanceInDot = TESTNET ? convertToDotTestNet(balance.toHuman().free) : convertToDot(balance.toHuman().free)
-    console.log(balanceInDot);
 
     const collection = db.collection('users').doc(uid).collection('wallets').doc(address)
 
@@ -298,14 +271,12 @@ const updateBalance = async (address, uid) => {
 
 /////Listes to all new blocks and checks if event equals transfer
 const listenToEvents = async () => {
+    console.log(11)
     api.query.system.events((events) => {
         console.log(`\nReceived ${events.length} events:`);
 
         events.forEach((record) => {
             let event = record.event
-            //console.log(event.method);
-
-            //console.log('from!: ' + from);
 
             if (event.method == TRANSFER) {
                 checkForAddresses(event.data);
