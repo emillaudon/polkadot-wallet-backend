@@ -5,14 +5,18 @@ import bip39 from 'bip39';
 
 import db from './firebaseSetup.js';
 import { Timestamp } from '@google-cloud/firestore';
+import bodyParser from 'body-parser';
 
 import BN from 'bn.js'
 
 
 //const api = require('./polk.js');
 const TRANSFER = 'Transfer';
-const TRANSFER_KEEP_ALIVE = ''
+const TESTNET = true;
 const app = express();
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
 const port = 3000;
 
 let addresses = [];
@@ -47,7 +51,8 @@ function generateMnemonic() {
 
 async function createCredentials(mnemonic) {
     const keyring = new Keyring({ type: 'sr25519' });
-    keyring.setSS58Format(0);
+    let format = TESTNET ? 42 : 0;
+    keyring.setSS58Format(format);
     const newPair = keyring.addFromUri(mnemonic);
 
     //var info = await api.query.system.account(newPair.address);
@@ -79,18 +84,32 @@ const saveToWatchList = async (address, uid) => {
 
 
 //////Perform transaction
-app.get('/transact', async (req, res) => {
-    const sender = req.params.sender;
-    const recipient = req.params.recipient;
+app.post('/transact/', async (req, res) => {
+    const sender = req.query.sender;
+    const user = req.query.user;
+    const recipient = req.query.recipient;
+    const amount = req.query.amount;
 
-    await performTransaction(sender, recipient);
+    console.log('sender: ' + sender);
+    console.log('user: ' + user);
+    console.log('rec ' + recipient);
+    console.log(amount)
+
+    const result = await db.collection('users').doc(user).collection('wallets').doc(sender).get();
+    let resData = result.data()
+    console.log(result.data())
+    let mnemonic = resData.mnemonic;
+
+    let credentials = await createCredentials(mnemonic)
+    await performTransaction(credentials, recipient, amount, user);
 
     res.send('Transaction performed')
 });
 
-async function performTransaction(sender, receiver) {
+async function performTransaction(sender, receiver, amount, user) {
+    console.log();
     const unsub = await api.tx.balances
-        .transfer(receiver.address, 1)
+        .transfer(receiver, parseFloat(amount))
         .signAndSend(sender, ({ events = [], status }) => {
             console.log(`Current status is ${status.type}`);
 
@@ -100,6 +119,23 @@ async function performTransaction(sender, receiver) {
                 events.forEach(({ phase, event: { data, method, section } }) => {
                     console.log(`\t' ${phase}: ${section}.${method}:: ${data}`);
                 });
+                console.log('sent: ' + sender.address)
+                console.log('rec:: ' + receiver)
+                console.log('amtmtm : : ' + amount)
+                let data = [
+                    sender.address,
+                    receiver,
+                    amount
+                ]
+
+                
+
+                saveTransaction(data, false);
+
+                if(addresses.includes(receiver)) {
+                    console.log('SINEHTJE HERE')
+                    saveTransaction(data, true)
+                }
 
                 unsub();
             }
@@ -109,15 +145,27 @@ async function performTransaction(sender, receiver) {
 
 
 ///////Calculate transaction cost
-app.get('/transactionWeight', async (req, res) => {
+app.get('/transactionWeight/:amount', async (req, res) => {
+    const amount = req.params.amount;
     const sender = req.params.sender;
     const recipient = req.params.recipient;
 
-    const transfer = api.tx.balances.transfer(recipient, 100);
+    let info;
 
-    //const { partialFee, weight } = await transfer.paymentInfo( - put key here - );
+    try {
+        info = await api.tx.balances.transfer(addresses[0], amount).paymentInfo(addresses[0]);
+        console.log(info)
 
-    res.send(`transaction will have a weight of ${weight}, with ${partialFee.toHuman()} weight fees`);
+    } catch (e) {
+        console.log(e)
+    }
+
+    
+
+
+
+    //res.send(`transaction will have a weight of ${weight}, with ${partialFee.toHuman()} weight fees`);
+    res.send(`${info.weight.toString()}`);
 });
 
 
@@ -135,6 +183,26 @@ const convertToDot = (amountData) => {
     } else if (amountData.includes('DOT')) {
         res = amount;
     } else if (amountData.includes('kDOT')) {
+        res = amount * 1000;
+    }
+    
+    return res;
+}
+
+//////Testnet
+const convertToDotTestNet = (amountData) => {
+    let amountSplit = amountData.split(' ');
+    let amount = parseFloat(amountSplit[0])
+
+    let res = 0.0;
+
+    if (amountData.includes('µWND')) {
+        res = amount * 0.000001
+    } else if (amountData.includes('mWND')) {
+        res = amount * 0.001
+    } else if (amountData.includes('WND')) {
+        res = amount;
+    } else if (amountData.includes('kWND')) {
         res = amount * 1000;
     }
     
@@ -166,21 +234,36 @@ const checkForAddresses = (data) => {
 ///////Saves transaction to the correct wallet
 const saveTransaction = async (data, incoming) => {
     console.log('saving');
-    console.log(incoming)
-    let from = data[0].toHuman().toString();
-    let to = data[1].toHuman().toString();
-    let amount = data[2].toHuman().toString();
-    amount = convertToDot(amount)
+
+    let from = data[0].toString();
+    let to = data[1].toString();
+    let amount = data[2].toString();
+    console.log(amount)
+    
 
     let receiving = incoming;
-
     let address = incoming ? to : from;
-    console.log(address)
+
+    try {
+        from = data[0].toHuman().toString();
+        to = data[1].toHuman().toString();
+        amount = data[2].toHuman().toString();
+
+        amount = TESTNET ? convertToDotTestNet(amount) : convertToDot(amount)
+
+        address = incoming ? to : from;
+
+        
+    } catch (e) {
+        
+    }
 
     const result = await db.collection('addresses').doc(address).get();
     let resData = result.data()
     let uid = resData.uid;
 
+    
+    console.log(amount);
     const collection = db.collection('users').doc(uid).collection('wallets').doc(address).collection('transactions')
     let timestamp = Date.now()
     console.log('saving2');
@@ -191,16 +274,22 @@ const saveTransaction = async (data, incoming) => {
         receiving: receiving,
         timestamp: timestamp
     });
+    console.log('saving3')
     updateBalance(address, uid);
 }
 
 //////Updates Balance of address
 const updateBalance = async (address, uid) => {
+    console.log(address);
+    console.log(uid);
     const { nonce, data: balance } = await api.query.system.account(address);
-    let balanceInDot = convertToDot(balance.toHuman().free)
+    console.log(balance.toHuman());
+    let balanceInDot = TESTNET ? convertToDotTestNet(balance.toHuman().free) : convertToDot(balance.toHuman().free)
     console.log(balanceInDot);
 
     const collection = db.collection('users').doc(uid).collection('wallets').doc(address)
+
+    console.log('balance updated of walllet: ' + address + ' of user: ' + uid)
     
     await collection.update({
         balance: balanceInDot
@@ -232,6 +321,7 @@ const getAddressesToWatch = async () => {
         let address = doc.id;
         addresses.push(address);
     });
+    
 }
 
 app.listen(port, async () => {
@@ -303,4 +393,5 @@ const listenToNewHeaders = async () => {
         console.log(lastHeader.toHuman())
         console.log(lastHeader.digest.toHuman())
     });
+    const { nonce, data: balance } = await api.query.system.account(address);
 };
